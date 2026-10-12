@@ -303,8 +303,7 @@ Each strategy is evaluated using several risk and return measures.
 Daily arithmetic returns are annualized as
 
 $$
-\mu_{\text{annual}}
-=
+\mu_{\text{annual}} =
 252\,E[r_d].
 $$
 
@@ -315,8 +314,7 @@ $$
 Daily volatility is annualized as
 
 $$
-\sigma_{\text{annual}}
-=
+\sigma_{\text{annual}} =
 \sqrt{252}\,\sigma_d.
 $$
 
@@ -334,8 +332,7 @@ $$
 ## Total Return
 
 $$
-R_{\text{total}}
-=
+R_{\text{total}} =
 \frac{V_{\text{final}}}
 {V_{\text{initial}}}
 -1.
