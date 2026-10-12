@@ -1,0 +1,949 @@
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import yfinance as yf
+
+from scipy.optimize import minimize
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+TICKERS = ["SPY", "QQQ", "TLT", "GLD"]
+
+START_DATE = "2001-01-01"
+
+BACKTEST_START = "2007-01-01"
+
+LOOKBACK_YEARS = 5
+
+TRADING_DAYS = 252
+
+# Educational simplification.
+# Can later be replaced with a realistic risk-free benchmark.
+RISK_FREE_RATE = 0.00
+
+INITIAL_VALUE = 100.0
+
+FIGURE_DIR = Path("figures")
+OUTPUT_DIR = Path("results")
+
+
+# ============================================================
+# CREATE OUTPUT DIRECTORIES
+# ============================================================
+
+FIGURE_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+OUTPUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# 1. DOWNLOAD HISTORICAL DATA
+# ============================================================
+
+prices = yf.download(
+    TICKERS,
+    start=START_DATE,
+    auto_adjust=True,
+    progress=False
+)["Close"]
+
+# Keep only dates for which all four assets have valid prices.
+prices = prices.dropna()
+
+print("\nDownloaded prices:")
+print(prices.head())
+
+print("\nAvailable period:")
+print(
+    prices.index[0],
+    "to",
+    prices.index[-1]
+)
+
+
+# ============================================================
+# 2. DAILY SIMPLE RETURNS
+# ============================================================
+
+returns = (
+    prices
+    .pct_change()
+    .dropna()
+)
+
+print("\nDaily simple returns:")
+print(returns.head())
+
+
+# ============================================================
+# 3. PORTFOLIO FUNCTIONS
+# ============================================================
+
+def annualized_portfolio_return(
+    weights,
+    mean_returns
+):
+    """
+    Calculate annualized expected portfolio return.
+    """
+
+    return (
+        weights
+        @ mean_returns
+        * TRADING_DAYS
+    )
+
+
+def annualized_portfolio_volatility(
+    weights,
+    covariance_matrix
+):
+    """
+    Calculate annualized portfolio volatility.
+    """
+
+    return np.sqrt(
+        weights
+        @ covariance_matrix
+        @ weights
+        * TRADING_DAYS
+    )
+
+
+def negative_sharpe_ratio(
+    weights,
+    mean_returns,
+    covariance_matrix,
+    risk_free_rate
+):
+    """
+    Return the negative Sharpe ratio.
+
+    scipy.optimize.minimize() performs minimization,
+    therefore maximizing Sharpe is equivalent to
+    minimizing -Sharpe.
+    """
+
+    portfolio_return = (
+        annualized_portfolio_return(
+            weights,
+            mean_returns
+        )
+    )
+
+    portfolio_volatility = (
+        annualized_portfolio_volatility(
+            weights,
+            covariance_matrix
+        )
+    )
+
+    sharpe = (
+        portfolio_return
+        - risk_free_rate
+    ) / portfolio_volatility
+
+    return -sharpe
+
+
+# ============================================================
+# 4. MAXIMUM-SHARPE OPTIMIZER
+# ============================================================
+
+def optimize_max_sharpe(
+    training_returns
+):
+    """
+    Find maximum-Sharpe portfolio weights using
+    only the supplied training-period returns.
+
+    Constraints:
+    - weights sum to 1
+    - no short selling
+    """
+
+    mean_returns = (
+        training_returns.mean()
+    )
+
+    covariance = (
+        training_returns.cov()
+    )
+
+    n_assets = len(
+        training_returns.columns
+    )
+
+    initial_weights = (
+        np.ones(n_assets)
+        / n_assets
+    )
+
+    bounds = tuple(
+        (0, 1)
+        for _ in range(n_assets)
+    )
+
+    constraints = (
+        {
+            "type": "eq",
+            "fun": lambda weights:
+                np.sum(weights) - 1
+        },
+    )
+
+    result = minimize(
+        negative_sharpe_ratio,
+        initial_weights,
+        args=(
+            mean_returns,
+            covariance,
+            RISK_FREE_RATE
+        ),
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints,
+        options={
+            "ftol": 1e-12,
+            "maxiter": 1000
+        }
+    )
+
+    if not result.success:
+        raise RuntimeError(
+            "Optimization failed: "
+            + result.message
+        )
+
+    return result.x
+
+
+# ============================================================
+# 5. BUY-AND-HOLD VALUE FOR ONE PERIOD
+# ============================================================
+
+def holding_period_value(
+    period_prices,
+    weights,
+    initial_value
+):
+    """
+    Allocate capital according to the specified weights
+    at the beginning of a period.
+
+    The resulting number of shares is then held without
+    rebalancing until the end of that period.
+    """
+
+    start_prices = (
+        period_prices.iloc[0]
+    )
+
+    capital_per_asset = (
+        initial_value
+        * weights
+    )
+
+    shares = (
+        capital_per_asset
+        / start_prices.to_numpy()
+    )
+
+    portfolio_value = (
+        period_prices.to_numpy()
+        @ shares
+    )
+
+    return pd.Series(
+        portfolio_value,
+        index=period_prices.index
+    )
+
+
+# ============================================================
+# 6. STATIC OPTIMIZATION
+# ============================================================
+
+# Use all available data before 2021 to build one portfolio.
+# Those weights remain frozen throughout the backtest.
+
+static_train_returns = returns.loc[
+    START_DATE:"2020-12-31"
+]
+
+static_weights = optimize_max_sharpe(
+    static_train_returns
+)
+
+print(
+    "\n============================================"
+)
+
+print(
+    "STATIC MAXIMUM-SHARPE WEIGHTS"
+)
+
+print(
+    f"Training period: "
+    f"{static_train_returns.index[0].date()} "
+    f"to "
+    f"{static_train_returns.index[-1].date()}"
+)
+
+print(
+    "============================================"
+)
+
+for ticker, weight in zip(
+    returns.columns,
+    static_weights
+):
+    print(
+        f"{ticker}: "
+        f"{weight:.2%}"
+    )
+
+
+# ============================================================
+# 7. STATIC OUT-OF-SAMPLE PORTFOLIO
+# ============================================================
+
+test_prices = prices.loc[
+    BACKTEST_START:
+]
+
+static_value = holding_period_value(
+    test_prices,
+    static_weights,
+    INITIAL_VALUE
+)
+
+
+# ============================================================
+# 8. ROLLING ANNUAL RE-OPTIMIZATION
+# ============================================================
+
+backtest_years = sorted(
+    prices.loc[
+        BACKTEST_START:
+    ].index.year.unique()
+)
+
+rolling_parts = []
+
+rolling_weight_history = []
+
+current_value = INITIAL_VALUE
+
+
+for year in backtest_years:
+
+    # --------------------------------------------------------
+    # Define rolling training window
+    # --------------------------------------------------------
+
+    training_start_year = (
+        year - LOOKBACK_YEARS
+    )
+
+    training_start = (
+        f"{training_start_year}-01-01"
+    )
+
+    training_end = (
+        f"{year - 1}-12-31"
+    )
+
+    training_returns = returns.loc[
+        training_start:training_end
+    ]
+
+    if training_returns.empty:
+        continue
+
+
+    # --------------------------------------------------------
+    # Optimize using only information available in the past
+    # --------------------------------------------------------
+
+    year_weights = optimize_max_sharpe(
+        training_returns
+    )
+
+
+    # --------------------------------------------------------
+    # Store weights
+    # --------------------------------------------------------
+
+    weight_record = {
+        "Year": year
+    }
+
+    for ticker, weight in zip(
+        returns.columns,
+        year_weights
+    ):
+        weight_record[ticker] = weight
+
+    rolling_weight_history.append(
+        weight_record
+    )
+
+
+    # --------------------------------------------------------
+    # Get prices for the year being tested
+    # --------------------------------------------------------
+
+    year_prices = prices[
+        prices.index.year == year
+    ]
+
+    if year_prices.empty:
+        continue
+
+
+    # --------------------------------------------------------
+    # Rebalance at the beginning of the year
+    # and hold until year-end
+    # --------------------------------------------------------
+
+    year_value = holding_period_value(
+        year_prices,
+        year_weights,
+        current_value
+    )
+
+
+    # Avoid duplicate year-boundary points
+    if len(rolling_parts) > 0:
+
+        year_value = (
+            year_value.iloc[1:]
+        )
+
+
+    rolling_parts.append(
+        year_value
+    )
+
+
+    # Carry final wealth into the next year
+    current_value = (
+        year_value.iloc[-1]
+    )
+
+
+# Join all yearly periods
+rolling_value = pd.concat(
+    rolling_parts
+)
+
+
+# Convert rolling weights to DataFrame
+rolling_weights = pd.DataFrame(
+    rolling_weight_history
+)
+
+rolling_weights = (
+    rolling_weights
+    .set_index("Year")
+)
+
+
+# ============================================================
+# 9. PRINT AND SAVE ROLLING WEIGHT HISTORY
+# ============================================================
+
+print(
+    "\n============================================"
+)
+
+print(
+    "ROLLING ANNUAL OPTIMIZED WEIGHTS"
+)
+
+print(
+    "============================================\n"
+)
+
+print(
+    rolling_weights.to_string(
+        formatters={
+            ticker:
+                lambda x: f"{x:.2%}"
+            for ticker in TICKERS
+        }
+    )
+)
+
+
+rolling_weights.to_csv(
+    OUTPUT_DIR
+    / "rolling_optimized_weights.csv"
+)
+
+
+# ============================================================
+# 10. EQUAL-WEIGHT ANNUAL REBALANCING
+# ============================================================
+
+equal_weights = (
+    np.ones(len(TICKERS))
+    / len(TICKERS)
+)
+
+equal_parts = []
+
+current_value = INITIAL_VALUE
+
+
+for year in backtest_years:
+
+    year_prices = prices[
+        prices.index.year == year
+    ]
+
+    if year_prices.empty:
+        continue
+
+    # Reset allocation to 25% in each asset
+    # at the beginning of every year.
+    year_value = holding_period_value(
+        year_prices,
+        equal_weights,
+        current_value
+    )
+
+    if len(equal_parts) > 0:
+
+        year_value = (
+            year_value.iloc[1:]
+        )
+
+    equal_parts.append(
+        year_value
+    )
+
+    current_value = (
+        year_value.iloc[-1]
+    )
+
+
+equal_value = pd.concat(
+    equal_parts
+)
+
+
+# ============================================================
+# 11. SPY BUY-AND-HOLD BENCHMARK
+# ============================================================
+
+spy_prices = test_prices["SPY"]
+
+spy_value = (
+    INITIAL_VALUE
+    * spy_prices
+    / spy_prices.iloc[0]
+)
+
+
+# ============================================================
+# 12. ALIGN ALL PORTFOLIO VALUE SERIES
+# ============================================================
+
+comparison_values = pd.concat(
+    {
+        "Rolling Optimized":
+            rolling_value,
+
+        "Static Optimized":
+            static_value,
+
+        "Equal Weight":
+            equal_value,
+
+        "SPY":
+            spy_value
+    },
+    axis=1
+)
+
+comparison_values = (
+    comparison_values.dropna()
+)
+
+
+# ============================================================
+# 13. DAILY RETURNS FROM PORTFOLIO VALUES
+# ============================================================
+
+comparison_returns = (
+    comparison_values
+    .pct_change()
+    .dropna()
+)
+
+
+# ============================================================
+# 14. PERFORMANCE STATISTICS
+# ============================================================
+
+def performance_statistics(
+    strategy_returns,
+    value_series,
+    risk_free_rate=0.0
+):
+    """
+    Calculate realized out-of-sample performance statistics.
+    """
+
+    # Annualized arithmetic return
+    annual_return = (
+        strategy_returns.mean()
+        * TRADING_DAYS
+    )
+
+    # Annualized volatility
+    annual_volatility = (
+        strategy_returns.std()
+        * np.sqrt(TRADING_DAYS)
+    )
+
+    # Sharpe ratio
+    sharpe = (
+        annual_return
+        - risk_free_rate
+    ) / annual_volatility
+
+    # Total compounded return
+    total_return = (
+        value_series.iloc[-1]
+        / value_series.iloc[0]
+        - 1
+    )
+
+    # Running historical maximum
+    running_max = (
+        value_series.cummax()
+    )
+
+    # Drawdown
+    drawdown = (
+        value_series
+        / running_max
+        - 1
+    )
+
+    # Maximum drawdown
+    max_drawdown = (
+        drawdown.min()
+    )
+
+    final_value = (
+        value_series.iloc[-1]
+    )
+
+    return {
+        "Annual Return":
+            annual_return,
+
+        "Volatility":
+            annual_volatility,
+
+        "Sharpe":
+            sharpe,
+
+        "Total Return":
+            total_return,
+
+        "Max Drawdown":
+            max_drawdown,
+
+        "Final Value":
+            final_value
+    }
+
+
+# ============================================================
+# 15. FULL PERFORMANCE COMPARISON
+# ============================================================
+
+statistics = {}
+
+for strategy in comparison_values.columns:
+
+    statistics[strategy] = (
+        performance_statistics(
+            comparison_returns[strategy],
+            comparison_values[strategy],
+            RISK_FREE_RATE
+        )
+    )
+
+
+comparison_table = pd.DataFrame(
+    statistics
+).T
+
+
+print(
+    "\n============================================"
+)
+
+print(
+    "OUT-OF-SAMPLE PERFORMANCE COMPARISON"
+)
+
+print(
+    "============================================\n"
+)
+
+
+print(
+    comparison_table.to_string(
+        formatters={
+
+            "Annual Return":
+                lambda x: f"{x:.2%}",
+
+            "Volatility":
+                lambda x: f"{x:.2%}",
+
+            "Sharpe":
+                lambda x: f"{x:.3f}",
+
+            "Total Return":
+                lambda x: f"{x:.2%}",
+
+            "Max Drawdown":
+                lambda x: f"{x:.2%}",
+
+            "Final Value":
+                lambda x: f"{x:.2f}"
+        }
+    )
+)
+
+
+# Save numerical results
+comparison_table.to_csv(
+    OUTPUT_DIR
+    / "performance_comparison.csv"
+)
+
+
+comparison_values.to_csv(
+    OUTPUT_DIR
+    / "portfolio_values.csv"
+)
+
+
+# ============================================================
+# 16. PLOT PORTFOLIO PERFORMANCE
+# ============================================================
+
+plt.figure(
+    figsize=(11, 7)
+)
+
+
+for strategy in comparison_values.columns:
+
+    plt.plot(
+        comparison_values.index,
+        comparison_values[strategy],
+        label=strategy
+    )
+
+
+plt.xlabel(
+    "Date"
+)
+
+plt.ylabel(
+    "Portfolio value "
+    "(initial value = 100)"
+)
+
+plt.title(
+    "Out-of-Sample Portfolio Backtest"
+)
+
+plt.legend()
+
+plt.grid(
+    alpha=0.3
+)
+
+plt.tight_layout()
+
+
+plt.savefig(
+    FIGURE_DIR
+    / "out_of_sample_backtest.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+
+# ============================================================
+# 17. PLOT ROLLING PORTFOLIO WEIGHTS
+# ============================================================
+
+plt.figure(
+    figsize=(10, 6)
+)
+
+
+for ticker in rolling_weights.columns:
+
+    plt.plot(
+        rolling_weights.index,
+        rolling_weights[ticker],
+        marker="o",
+        label=ticker
+    )
+
+
+plt.xlabel(
+    "Rebalancing Year"
+)
+
+plt.ylabel(
+    "Portfolio Weight"
+)
+
+plt.title(
+    "Rolling Maximum-Sharpe Portfolio Weights"
+)
+
+plt.legend()
+
+plt.grid(
+    alpha=0.3
+)
+
+plt.tight_layout()
+
+
+plt.savefig(
+    FIGURE_DIR
+    / "rolling_weights_lines.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+
+# ============================================================
+# 18. STACKED AREA CHART OF ROLLING WEIGHTS
+# ============================================================
+
+plt.figure(
+    figsize=(10, 6)
+)
+
+plt.stackplot(
+    rolling_weights.index,
+    rolling_weights["GLD"],
+    rolling_weights["QQQ"],
+    rolling_weights["SPY"],
+    rolling_weights["TLT"],
+    labels=[
+        "GLD",
+        "QQQ",
+        "SPY",
+        "TLT"
+    ]
+)
+
+plt.xlabel(
+    "Rebalancing Year"
+)
+
+plt.ylabel(
+    "Portfolio Weight"
+)
+
+plt.title(
+    "Rolling Maximum-Sharpe Portfolio Weights "
+    "(Stacked Area)"
+)
+
+plt.legend(
+    loc="upper left"
+)
+
+plt.grid(
+    alpha=0.3
+)
+
+plt.tight_layout()
+
+
+plt.savefig(
+    FIGURE_DIR
+    / "rolling_weights_stacked.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+
+# ============================================================
+# 19. OUTPUT SUMMARY
+# ============================================================
+
+print(
+    "\nSaved figures:"
+)
+
+print(
+    FIGURE_DIR
+    / "out_of_sample_backtest.png"
+)
+
+print(
+    FIGURE_DIR
+    / "rolling_weights_lines.png"
+)
+
+print(
+    FIGURE_DIR
+    / "rolling_weights_stacked.png"
+)
+
+
+print(
+    "\nSaved numerical results:"
+)
+
+print(
+    OUTPUT_DIR
+    / "performance_comparison.csv"
+)
+
+print(
+    OUTPUT_DIR
+    / "rolling_optimized_weights.csv"
+)
+
+print(
+    OUTPUT_DIR
+    / "portfolio_values.csv"
+)
