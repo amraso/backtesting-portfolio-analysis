@@ -1,131 +1,76 @@
-# Project 2 — Portfolio Backtesting and Rolling Optimization with Python
+# Portfolio Backtesting and Rolling Optimization with Python
 
-This project investigates whether portfolios optimized using historical market data continue to perform well on **unseen future data**.
+This project investigates how portfolio optimization performs when evaluated on **unseen historical data**, rather than on the same data used to construct the portfolio.
 
-It extends classical Markowitz portfolio optimization into an **out-of-sample backtesting framework** and compares four strategies:
+The project extends classical Markowitz mean-variance optimization into an out-of-sample backtesting framework and compares:
 
 - Rolling maximum-Sharpe optimization
 - Static maximum-Sharpe optimization
-- Equal-weight portfolio
-- SPY buy-and-hold benchmark
+- Equal-weight annual rebalancing
+- SPY buy-and-hold
+- Rolling lookback windows from 1 to 10 years
 
-The analysis uses four ETFs:
+The analysis uses four ETFs representing different asset classes:
 
-- **SPY** — S&P 500 ETF
-- **QQQ** — Nasdaq-100 ETF
-- **TLT** — Long-term U.S. Treasury bond ETF
-- **GLD** — Gold ETF
+- **SPY** — S&P 500
+- **QQQ** — Nasdaq-100
+- **TLT** — Long-term U.S. Treasury bonds
+- **GLD** — Gold
 
 ---
 
 ## Objective
 
-A portfolio can appear highly attractive when evaluated using the same historical data that were used to construct it.
+A portfolio can appear optimal when evaluated using the same historical observations that were used to construct it.
 
 However,
 
 $$
-\text{in-sample optimal}
-\neq
-\text{out-of-sample optimal}
+\text{in-sample optimal} \neq \text{out-of-sample optimal}
 $$
 
-The objective of this project is therefore to evaluate portfolio strategies using only information that would have been available at the time each investment decision was made.
+The purpose of this project is therefore to separate the portfolio construction period from the subsequent evaluation period.
 
-The general workflow is:
+The basic workflow is:
 
 $$
 \text{Historical data}
 \rightarrow
 \text{Parameter estimation}
 \rightarrow
-\text{Portfolio optimization}
+\text{Optimization}
 \rightarrow
 \text{Future unseen data}
 \rightarrow
 \text{Performance evaluation}
 $$
 
-This structure helps avoid **look-ahead bias**.
+This allows the project to investigate:
+
+- out-of-sample portfolio performance
+- look-ahead bias
+- rolling portfolio optimization
+- annual rebalancing
+- parameter sensitivity
+- risk-adjusted performance
+- robustness to the choice of historical lookback window
 
 ---
 
-# Strategies
+# Assets
 
-## 1. Rolling Maximum-Sharpe Portfolio
+The portfolio contains:
 
-At the beginning of each year, the strategy uses only the previous five years of market data.
+| Ticker | Asset |
+|---|---|
+| SPY | S&P 500 ETF |
+| QQQ | Nasdaq-100 ETF |
+| TLT | Long-term U.S. Treasury ETF |
+| GLD | Gold ETF |
 
-For example:
+Only dates for which all assets have valid price observations are retained.
 
-```text
-2018–2022 -> optimize weights -> invest during 2023
-2019–2023 -> optimize weights -> invest during 2024
-2020–2024 -> optimize weights -> invest during 2025
-```
-
-For each rolling training window:
-
-1. Historical daily returns are calculated.
-2. Mean returns are estimated.
-3. The covariance matrix is estimated.
-4. Maximum-Sharpe portfolio weights are calculated.
-5. The portfolio is rebalanced at the beginning of the following year.
-6. The resulting positions are held until the next annual rebalance.
-
-The process is then repeated with a new five-year historical window.
-
----
-
-## 2. Static Maximum-Sharpe Portfolio
-
-The static strategy performs the optimization only once using historical data available before the selected out-of-sample period.
-
-The resulting weights are then kept fixed throughout the backtest.
-
-This allows comparison between:
-
-$$
-\text{static optimization}
-$$
-
-and
-
-$$
-\text{adaptive rolling optimization}.
-$$
-
----
-
-## 3. Equal-Weight Portfolio
-
-The equal-weight portfolio allocates the same amount of capital to each ETF:
-
-$$
-w =
-(0.25,\;0.25,\;0.25,\;0.25)
-$$
-
-corresponding to:
-
-- 25% SPY
-- 25% QQQ
-- 25% TLT
-- 25% GLD
-
-The portfolio is rebalanced back to equal weights at the beginning of every year.
-
-During the year, asset weights are allowed to drift naturally as prices change.
-
-This provides a simple diversification benchmark that requires no return or covariance estimation.
-
----
-
-## 4. SPY Buy-and-Hold
-
-SPY is used as a passive U.S. equity benchmark.
-
-An initial investment is made at the beginning of the backtest period and then held without rebalancing.
+Prices are downloaded using `yfinance` with automatic adjustment enabled.
 
 ---
 
@@ -142,7 +87,7 @@ $$
 where:
 
 - $w$ is the vector of portfolio weights
-- $\mu$ is the vector of expected asset returns
+- $\mu$ is the vector of estimated asset returns
 
 ---
 
@@ -154,28 +99,24 @@ $$
 \sigma_p^2 = w^T\Sigma w
 $$
 
-where:
-
-- $\Sigma$ is the covariance matrix of asset returns
+where $\Sigma$ is the covariance matrix of asset returns.
 
 Portfolio volatility is therefore
 
 $$
-\sigma_p =
-\sqrt{w^T\Sigma w}.
+\sigma_p = \sqrt{w^T\Sigma w}
 $$
 
-The covariance terms allow the model to account for diversification between assets.
+The covariance terms allow the optimization to account for diversification between assets.
 
 ---
 
-# Sharpe Ratio
+# Maximum-Sharpe Optimization
 
-Portfolio weights are selected by maximizing the Sharpe ratio:
+The optimizer selects portfolio weights by maximizing the Sharpe ratio:
 
 $$
-S =
-\frac{\mu_p-r_f}{\sigma_p}
+S = \frac{\mu_p-r_f}{\sigma_p}
 $$
 
 where:
@@ -184,9 +125,7 @@ where:
 - $r_f$ is the risk-free rate
 - $\sigma_p$ is portfolio volatility
 
-The Sharpe ratio measures **excess expected return per unit of volatility**.
-
-The numerical optimizer uses SciPy's **Sequential Least Squares Programming (SLSQP)** algorithm.
+The optimization is performed using SciPy's **Sequential Least Squares Programming (SLSQP)** algorithm.
 
 Because `scipy.optimize.minimize()` performs minimization, the code minimizes
 
@@ -194,103 +133,140 @@ $$
 -S
 $$
 
-which is equivalent to maximizing
-
-$$
-S.
-$$
-
-In the current implementation,
-
-$$
-r_f = 0
-$$
-
-is used as a simplifying educational assumption.
-
-A future version can replace this with a realistic short-term risk-free benchmark.
+which is equivalent to maximizing the Sharpe ratio.
 
 ---
 
-# Optimization Constraints
+## Constraints
 
-All optimized portfolios satisfy:
+The optimized portfolios are fully invested:
 
 $$
 \sum_i w_i = 1
 $$
 
-which ensures that the portfolio is fully invested.
-
-Short selling is not permitted:
+and short selling is not allowed:
 
 $$
-0 \leq w_i \leq 1.
+0 \leq w_i \leq 1
+$$
+
+The current implementation uses
+
+$$
+r_f = 0
+$$
+
+as a simplifying educational assumption.
+
+---
+
+# Strategies
+
+## 1. Rolling Maximum-Sharpe Portfolio
+
+The main rolling strategy uses a **5-year historical lookback window**.
+
+At the beginning of each year:
+
+1. Only the previous five years of returns are selected.
+2. Mean returns are estimated.
+3. The covariance matrix is estimated.
+4. Maximum-Sharpe weights are calculated.
+5. The portfolio is rebalanced.
+6. The resulting positions are held throughout the year.
+
+The process is repeated every year.
+
+Conceptually:
+
+```text
+Past 5 years
+      ↓
+Estimate returns and covariance
+      ↓
+Maximum-Sharpe optimization
+      ↓
+Invest during following year
+      ↓
+Repeat
+```
+
+The optimizer never uses observations from the year it is attempting to predict.
+
+---
+
+## 2. Static Maximum-Sharpe Portfolio
+
+The static portfolio is optimized once using only historical information available **before the beginning of the backtest**.
+
+The resulting allocation is then kept unchanged throughout the entire test period.
+
+This provides a comparison between:
+
+$$
+\text{static optimization}
+$$
+
+and
+
+$$
+\text{adaptive rolling optimization}
 $$
 
 ---
 
-# Rolling Rebalancing
+## 3. Equal-Weight Portfolio
 
-The rolling strategy uses a five-year lookback window.
-
-At every annual rebalance:
+The equal-weight strategy allocates:
 
 $$
-\text{past 5 years}
-\rightarrow
-\mu,\Sigma
-\rightarrow
-\text{maximum-Sharpe weights}
-\rightarrow
-\text{hold for next year}
+25\%
 $$
 
-The important information flow is therefore:
+to each ETF:
 
 $$
-\boxed{
-\text{past information}
-\rightarrow
-\text{portfolio decision}
-\rightarrow
-\text{future performance}
-}
+w =
+(0.25,\;0.25,\;0.25,\;0.25)
 $$
 
-and never:
+The portfolio is rebalanced annually.
 
-$$
-\text{future information}
-\rightarrow
-\text{past decision}.
-$$
+During each year, the number of shares remains unchanged, allowing the portfolio weights to drift naturally as asset prices change.
 
-This is essential for a meaningful backtest.
+---
+
+## 4. SPY Buy-and-Hold
+
+SPY is used as a passive U.S. equity benchmark.
+
+An initial investment is made at the beginning of the backtest and then held for the entire period.
 
 ---
 
 # Buy-and-Hold Between Rebalances
 
-After weights are selected, capital is allocated among the ETFs at the beginning of each year.
+After portfolio weights are determined, the capital invested in each asset is
 
-The corresponding number of shares is calculated as
+$$
+C_i = w_iV_0
+$$
+
+The number of shares purchased is
 
 $$
 N_i =
-\frac{w_i V_0}{P_{i,0}}
+\frac{w_iV_0}{P_{i,0}}
 $$
 
 where:
 
-- $N_i$ is the number of shares of asset $i$
-- $w_i$ is its portfolio weight
 - $V_0$ is portfolio value at the beginning of the period
-- $P_{i,0}$ is the asset price at the beginning of the period
+- $P_{i,0}$ is the initial asset price
+- $w_i$ is the portfolio weight
 
-These shares are then held throughout the year.
-
-The portfolio is rebalanced only when the next annual period begins.
+The number of shares remains constant until the following rebalance.
 
 ---
 
@@ -303,19 +279,15 @@ Each strategy is evaluated using several risk and return measures.
 Daily arithmetic returns are annualized as
 
 $$
-\mu_{\text{annual}} =
-252\,E[r_d].
+\mu_{\text{annual}} = 252\,E[r_d]
 $$
 
 ---
 
 ## Annualized Volatility
 
-Daily volatility is annualized as
-
 $$
-\sigma_{\text{annual}} =
-\sqrt{252}\,\sigma_d.
+\sigma_{\text{annual}} = \sqrt{252}\,\sigma_d
 $$
 
 ---
@@ -323,8 +295,7 @@ $$
 ## Sharpe Ratio
 
 $$
-S =
-\frac{\mu-r_f}{\sigma}.
+S = \frac{\mu-r_f}{\sigma}
 $$
 
 ---
@@ -333,74 +304,108 @@ $$
 
 $$
 R_{\text{total}} =
-\frac{V_{\text{final}}}
-{V_{\text{initial}}}
--1.
+\frac{V_{\text{final}}}{V_{\text{initial}}}-1
 $$
 
 ---
 
 ## Drawdown
 
-At any time $t$, drawdown is defined as
+At time $t$,
 
 $$
 D_t =
-\frac{V_t}
-{\max_{\tau\leq t}V_\tau}
--1.
+\frac{V_t}{\max_{\tau \leq t}V_\tau}-1
 $$
 
-Maximum drawdown is the largest observed loss from a previous portfolio peak.
+Maximum drawdown corresponds to the largest historical decline from a previous portfolio peak.
 
 ---
 
-# Example Results
+# Lookback-Window Robustness Study
 
-For the long historical backtest used during development, the strategies produced approximately:
+A central part of the project investigates how sensitive rolling maximum-Sharpe optimization is to the amount of historical data used for parameter estimation.
 
-| Strategy | Annual Return | Volatility | Sharpe | Total Return | Max Drawdown |
-|---|---:|---:|---:|---:|---:|
-| Rolling Optimized | 10.92% | 11.76% | 0.929 | 647.10% | -30.02% |
-| Static Optimized | 12.11% | 12.56% | 0.964 | 825.22% | -32.99% |
-| Equal Weight | 10.69% | 10.98% | 0.973 | 625.85% | -25.03% |
-| SPY | 12.42% | 19.57% | 0.635 | 689.13% | -55.19% |
+The rolling strategy is repeated for lookback windows ranging from:
 
-Results depend on the selected historical window and on the latest market data available when the script is executed.
+$$
+1,2,3,\ldots,10\text{ years}
+$$
+
+For every lookback window, exactly the same procedure is performed:
+
+$$
+\text{Previous }N\text{ years}
+\rightarrow
+\mu,\Sigma
+\rightarrow
+\text{Maximum-Sharpe portfolio}
+\rightarrow
+\text{Following year}
+$$
+
+The strategies are then restricted to their **common available evaluation period** and normalized to an initial value of 100.
+
+This ensures that performance differences are not caused simply by one strategy having a longer backtest period than another.
 
 ---
 
-# Interpretation
+# Lookback Sensitivity Results
 
-Several useful observations emerge from the backtest.
+The lookback analysis produced the following results during development:
 
-### SPY produced strong absolute returns
+| Lookback | Annual Return | Volatility | Sharpe | Total Return | Max Drawdown |
+|---:|---:|---:|---:|---:|---:|
+| 1 year | 11.77% | 14.04% | 0.838 | 339.98% | -25.03% |
+| 2 years | 11.44% | 12.46% | 0.918 | 332.84% | -32.32% |
+| 3 years | 11.63% | 12.07% | 0.964 | 347.43% | -30.94% |
+| 4 years | 10.96% | 12.15% | 0.903 | 307.65% | -30.17% |
+| 5 years | 11.71% | 12.19% | 0.961 | 351.32% | -30.02% |
+| **6 years** | **12.03%** | **12.39%** | **0.971** | **370.05%** | **-28.35%** |
+| 7 years | 11.39% | 12.48% | 0.912 | 329.58% | -30.80% |
+| 8 years | 11.53% | 12.66% | 0.911 | 336.95% | -32.75% |
+| 9 years | 10.86% | 12.80% | 0.848 | 297.11% | -33.99% |
+| 10 years | 10.81% | 12.62% | 0.857 | 296.03% | -33.09% |
 
-SPY achieved a high annual return, but this came with considerably higher volatility and a much larger historical drawdown.
-
-### Diversification reduced portfolio risk
-
-Both optimized and equal-weight portfolios substantially reduced volatility and drawdowns compared with a pure-equity SPY allocation.
-
-### Equal weighting remained highly competitive
-
-The simple equal-weight strategy achieved strong risk-adjusted performance despite requiring no estimation of expected returns or covariance.
-
-This illustrates an important quantitative-finance principle:
+The highest Sharpe ratio was obtained using a **6-year lookback window**:
 
 $$
-\boxed{
-\text{more complex}
-\neq
-\text{automatically better}
-}
+S_{6y}=0.971
 $$
 
-### Optimized weights are unstable
+with:
 
-The rolling maximum-Sharpe allocation can change substantially from year to year.
+$$
+R_{6y}=12.03\%
+$$
 
-This reflects the sensitivity of mean-variance optimization to estimates of:
+and
+
+$$
+\sigma_{6y}=12.39\%
+$$
+
+However, the result should not be interpreted as proof that six years is universally optimal.
+
+The 3-year and 5-year windows produced very similar Sharpe ratios:
+
+$$
+S_{3y}=0.964
+$$
+
+$$
+S_{5y}=0.961
+$$
+
+This suggests a broader region of relatively strong performance around intermediate historical windows rather than a single sharply isolated optimum.
+
+---
+
+# Interpretation of Lookback Length
+
+Very short estimation windows respond quickly to recent market behavior but use relatively few observations.
+
+This can increase estimation noise in:
 
 $$
 \mu
@@ -409,83 +414,164 @@ $$
 and
 
 $$
-\Sigma.
+\Sigma
 $$
 
-Historical optimal allocations are therefore not necessarily stable through time.
+and therefore make optimized portfolio weights less stable.
+
+Longer windows use more observations and can produce more stable statistical estimates, but older observations may describe market regimes that are no longer representative.
+
+The experiment therefore illustrates a trade-off between:
+
+$$
+\text{responsiveness}
+\leftrightarrow
+\text{statistical stability}
+$$
+
+For this dataset, intermediate lookback windows generally produced stronger risk-adjusted performance than either very short or very long windows.
+
+---
+
+# Main Observations
+
+The project highlights several important quantitative-finance concepts.
+
+### In-sample optimization does not guarantee future performance
+
+Portfolio weights estimated from historical data can perform very differently when applied to unseen observations.
+
+### Rolling optimization can adapt to changing regimes
+
+Re-estimating portfolio parameters periodically allows allocations to respond to changes in correlations, volatility, and historical returns.
+
+### Optimization is sensitive to estimation choices
+
+Changing the historical lookback period changes:
+
+- expected returns
+- covariance estimates
+- portfolio weights
+- risk-adjusted performance
+
+### More historical data is not necessarily better
+
+A longer historical sample produces more observations but may include market regimes that are less relevant to the current environment.
+
+### Simpler strategies remain important benchmarks
+
+Equal-weight allocation and passive SPY exposure provide useful reference points when evaluating whether a more complex optimization procedure actually adds value.
+
+### Higher return does not necessarily mean better performance
+
+Portfolio evaluation must consider both return and risk.
 
 ---
 
 # Figures
 
-## Out-of-Sample Portfolio Performance
+## Out-of-Sample Strategy Comparison
 
-![Out-of-sample portfolio backtest](figures/out_of_sample_backtest.png)
+![Out-of-sample backtest](figures/out_of_sample_backtest.png)
 
-The figure compares the growth of an initial portfolio value of 100 for:
+Compares:
 
-- Rolling optimized portfolio
-- Static optimized portfolio
-- Equal-weight portfolio
+- rolling maximum-Sharpe
+- static maximum-Sharpe
+- equal weight
 - SPY buy-and-hold
 
 ---
 
-## Rolling Maximum-Sharpe Weights
+## Rolling Portfolio Weights
 
-![Rolling optimized weights](figures/rolling_weights_lines.png)
+![Rolling weights](figures/rolling_weights_lines.png)
 
-This figure shows how the optimized allocation changes from one annual rebalance to the next.
-
-Large changes in portfolio weights illustrate the sensitivity of maximum-Sharpe optimization to the historical estimation window.
+Shows how maximum-Sharpe portfolio allocations change between annual rebalancing dates.
 
 ---
 
-## Rolling Portfolio Allocation — Stacked View
+## Rolling Allocation — Stacked View
 
-![Rolling weights stacked](figures/rolling_weights_stacked.png)
+![Rolling allocation](figures/rolling_weights_stacked.png)
 
-The stacked-area representation shows how the complete 100% portfolio allocation changes through time.
-
-At every rebalance:
-
-$$
-\sum_i w_i = 1.
-$$
+Shows the complete portfolio composition through time.
 
 ---
 
-# Generated Results
+## Portfolio Value vs Lookback Window
 
-The script automatically generates numerical outputs in:
+![Lookback portfolio comparison](figures/lookback_portfolio_comparison.png)
+
+Compares the cumulative performance of rolling strategies using historical windows from 1 to 10 years.
+
+---
+
+## Sharpe Ratio vs Lookback Window
+
+![Sharpe vs lookback](figures/lookback_vs_sharpe.png)
+
+Shows the sensitivity of risk-adjusted performance to the historical estimation window.
+
+The best historical Sharpe ratio in the tested range occurred at six years.
+
+---
+
+## Annualized Return vs Lookback Window
+
+![Return vs lookback](figures/lookback_vs_return.png)
+
+---
+
+## Volatility vs Lookback Window
+
+![Volatility vs lookback](figures/lookback_vs_volatility.png)
+
+---
+
+## Maximum Drawdown vs Lookback Window
+
+![Drawdown vs lookback](figures/lookback_vs_drawdown.png)
+
+---
+
+# Generated Numerical Results
+
+The script automatically stores numerical results in the `results/` directory.
 
 ```text
 results/
 ├── performance_comparison.csv
 ├── rolling_optimized_weights.csv
-└── portfolio_values.csv
+├── portfolio_values.csv
+├── lookback_robustness.csv
+└── lookback_portfolio_values.csv
 ```
 
 ### `performance_comparison.csv`
 
-Contains:
+Contains performance statistics for:
 
-- annual return
-- volatility
-- Sharpe ratio
-- total return
-- maximum drawdown
-- final portfolio value
-
-for each strategy.
+- rolling optimized portfolio
+- static optimized portfolio
+- equal-weight portfolio
+- SPY
 
 ### `rolling_optimized_weights.csv`
 
-Contains the optimized ETF allocation for every annual rebalancing year.
+Contains the annual optimized portfolio allocation for the main rolling strategy.
 
 ### `portfolio_values.csv`
 
-Contains the complete historical portfolio-value series for every strategy.
+Contains the complete portfolio-value history for the main strategy comparison.
+
+### `lookback_robustness.csv`
+
+Contains performance statistics for lookback windows from 1 to 10 years.
+
+### `lookback_portfolio_values.csv`
+
+Contains the portfolio-value histories used in the lookback robustness analysis.
 
 ---
 
@@ -502,12 +588,19 @@ backtesting-portfolio-analysis/
 ├── figures/
 │   ├── out_of_sample_backtest.png
 │   ├── rolling_weights_lines.png
-│   └── rolling_weights_stacked.png
+│   ├── rolling_weights_stacked.png
+│   ├── lookback_portfolio_comparison.png
+│   ├── lookback_vs_sharpe.png
+│   ├── lookback_vs_return.png
+│   ├── lookback_vs_volatility.png
+│   └── lookback_vs_drawdown.png
 │
 └── results/
     ├── performance_comparison.csv
     ├── rolling_optimized_weights.csv
-    └── portfolio_values.csv
+    ├── portfolio_values.csv
+    ├── lookback_robustness.csv
+    └── lookback_portfolio_values.csv
 ```
 
 ---
@@ -579,44 +672,47 @@ yfinance
 
 # Limitations
 
-This project is an educational implementation of portfolio backtesting and should not be interpreted as investment advice.
+This project is an educational implementation of portfolio optimization and historical backtesting.
 
 Important limitations include:
 
-- expected returns are estimated from historical data
-- covariance relationships may change over time
-- optimization is sensitive to estimation error
+- historical mean returns are used as estimates of expected returns
+- covariance estimates are based entirely on historical observations
+- portfolio optimization is sensitive to estimation error
 - transaction costs are ignored
 - bid-ask spreads are ignored
 - taxes are ignored
 - market impact is ignored
 - annual rebalancing is assumed to occur without cost
-- the risk-free rate is currently fixed at zero
-- only four ETFs are considered
-- short selling is not permitted
-- past performance does not imply future performance
+- the risk-free rate is fixed at zero
+- short selling is not allowed
+- only four ETFs are included
+- the universe of assets is fixed
+- the historical lookback study represents a parameter sensitivity analysis, not proof of an optimal future parameter
+- historical performance does not imply future performance
 
 ---
 
 # Possible Extensions
 
-Future versions could investigate:
+Possible future developments include:
 
-- realistic time-dependent risk-free rates
+- time-dependent risk-free rates
 - transaction costs
-- quarterly or monthly rebalancing
-- alternative rolling-window lengths
+- portfolio turnover analysis
+- monthly or quarterly rebalancing
+- expanding-window estimation
 - additional asset classes
-- minimum-variance portfolios
-- maximum-diversification portfolios
-- Sortino ratio
-- Value at Risk (VaR)
-- Expected Shortfall
+- minimum-variance optimization
 - volatility targeting
-- robust covariance estimators
-- shrinkage methods
-- Black-Litterman optimization
-- comparison with additional benchmarks
+- Sortino ratio
+- Value at Risk
+- Expected Shortfall
+- covariance shrinkage
+- robust optimization
+- Black-Litterman models
+- walk-forward parameter selection
+- nested out-of-sample testing
 
 ---
 
